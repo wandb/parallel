@@ -143,7 +143,7 @@ func Collect[T any](executor Executor) CollectingExecutor[T] {
 	var outOfLineResults []T
 	making.res = &outOfLineResults
 	pipe := making.pipe // Don't capture a pointer to the executor
-	making.pipeWorkers.Go(func(context.Context) {
+	making.readGroup.Go(func(context.Context) {
 		for item := range pipe {
 			outOfLineResults = append(outOfLineResults, item)
 		}
@@ -162,9 +162,8 @@ func Collect[T any](executor Executor) CollectingExecutor[T] {
 // should still be cleaned up.
 func Feed[T any](executor Executor, receiver func(context.Context, T) error) FeedingExecutor[T] {
 	making := feedingGroup[T]{makePipeGroup[T, struct{}](executor)}
-	pipe := making.pipe // Don't capture a pointer to the executor
-	_, cancel := making.g.getContext()
-	making.pipeWorkers.Go(func(ctx context.Context) {
+	pipe, cancel := making.pipe, making.readGroup.cancel // Don't capture a pointer to the executor
+	making.readGroup.Go(func(ctx context.Context) {
 		for val := range pipe {
 			if err := receiver(ctx, val); err != nil {
 				cancel(err)
@@ -190,7 +189,7 @@ func GatherErrs(executor Executor) AllErrsExecutor {
 	var outOfLineErrs []error
 	making.res = &outOfLineErrs
 	pipe := making.pipe // Don't capture a pointer to the executor
-	making.pipeWorkers.Go(func(context.Context) {
+	making.readGroup.Go(func(context.Context) {
 		for err := range pipe {
 			outOfLineErrs = append(outOfLineErrs, err)
 		}
@@ -213,7 +212,7 @@ func CollectWithErrs[T any](executor Executor) CollectingAllErrsExecutor[T] {
 	var outOfLineResults collectedResultWithErrs[T]
 	making.res = &outOfLineResults
 	pipe := making.pipe // Don't capture a pointer to the executor
-	making.pipeWorkers.Go(func(context.Context) {
+	making.readGroup.Go(func(context.Context) {
 		for item := range pipe {
 			if item.err != nil {
 				outOfLineResults.errs = append(outOfLineResults.errs, item.err)
@@ -240,7 +239,7 @@ func FeedWithErrs[T any](executor Executor, receiver func(context.Context, T) er
 	var outOfLineResults []error
 	making.res = &outOfLineResults
 	pipe := making.pipe // Don't capture a pointer to the executor
-	making.pipeWorkers.Go(func(ctx context.Context) {
+	making.readGroup.Go(func(ctx context.Context) {
 		for pair := range pipe {
 			if pair.err != nil {
 				outOfLineResults = append(outOfLineResults, pair.err)
@@ -286,9 +285,9 @@ func (eg *errGroup) Wait() error {
 
 func makePipeGroup[T any, R any](executor Executor) *pipeGroup[T, R] {
 	making := &pipeGroup[T, R]{
-		g:           executor,
-		pipeWorkers: makeGroup(executor.getContext()), // use the same context for the pipe group
-		pipe:        make(chan T, bufferSize),
+		writeGroup: executor,
+		readGroup:  makeGroup(executor.getContext()), // use the same context for the readers group
+		pipe:       make(chan T, bufferSize),
 	}
 	runtime.SetFinalizer(making, func(doomed *pipeGroup[T, R]) {
 		close(doomed.pipe)
@@ -306,11 +305,11 @@ type pipeGroup[T any, R any] struct {
 	// memory. Thus, if the user forgets to call Wait(), we can hook the GC
 	// finalizer and ensure that the channels are closed and the goroutines we
 	// were running get cleaned up.
-	g           Executor
-	pipeWorkers *group
-	pipe        chan T
-	awaited     atomic.Bool
-	res         R
+	writeGroup Executor    // Group for workers writing into the pipe
+	readGroup  *group      // Group for workers reading from the pipe
+	pipe       chan T      // The pipe itself, where all the values go through
+	awaited    atomic.Bool // Set when doWait() is called, so we don't close the pipe twice
+	res        R           // Extra field for storing aggregated results, if we're doing that
 }
 
 func sendToPipe[T any](pipe chan T, val T) {
@@ -340,10 +339,10 @@ func (pg *pipeGroup[T, R]) doWait() {
 			}
 		}()
 		// Runs first: Wait for inputs
-		pg.g.Wait()
+		pg.writeGroup.Wait()
 	}()
 	// Runs third: Wait for outputs to be done
-	pg.pipeWorkers.Wait()
+	pg.readGroup.Wait()
 }
 
 var _ CollectingExecutor[int] = collectingGroup[int]{}
@@ -353,9 +352,8 @@ type collectingGroup[T any] struct {
 }
 
 func (cg collectingGroup[T]) Go(op func(context.Context) (T, error)) {
-	pipe := cg.pipe // Don't capture a pointer to the group
-	_, cancel := cg.g.getContext()
-	cg.g.Go(func(ctx context.Context) {
+	pipe, cancel := cg.pipe, cg.readGroup.cancel // Don't capture a pointer to the group
+	cg.writeGroup.Go(func(ctx context.Context) {
 		val, err := op(ctx)
 		if err != nil {
 			cancel(err)
@@ -367,8 +365,7 @@ func (cg collectingGroup[T]) Go(op func(context.Context) (T, error)) {
 
 func (cg collectingGroup[T]) Wait() ([]T, error) {
 	cg.doWait()
-	ctx, _ := cg.g.getContext()
-	if err := context.Cause(ctx); err != nil {
+	if err := context.Cause(cg.readGroup.ctx); err != nil {
 		// We have an error; return it
 		return nil, err
 	}
@@ -382,9 +379,8 @@ type feedingGroup[T any] struct {
 }
 
 func (fg feedingGroup[T]) Go(op func(context.Context) (T, error)) {
-	pipe := fg.pipe // Don't capture a pointer to the group
-	_, cancel := fg.g.getContext()
-	fg.g.Go(func(ctx context.Context) {
+	pipe, cancel := fg.pipe, fg.readGroup.cancel // Don't capture a pointer to the group
+	fg.writeGroup.Go(func(ctx context.Context) {
 		val, err := op(ctx)
 		if err != nil {
 			cancel(err)
@@ -396,7 +392,7 @@ func (fg feedingGroup[T]) Go(op func(context.Context) (T, error)) {
 
 func (fg feedingGroup[T]) Wait() error {
 	fg.doWait()
-	return context.Cause(fg.pipeWorkers.ctx)
+	return context.Cause(fg.readGroup.ctx)
 }
 
 var _ AllErrsExecutor = multiErrGroup{}
@@ -407,7 +403,7 @@ type multiErrGroup struct {
 
 func (meg multiErrGroup) Go(op func(context.Context) error) {
 	pipe := meg.pipe // Don't capture a pointer to the group
-	meg.g.Go(func(ctx context.Context) {
+	meg.writeGroup.Go(func(ctx context.Context) {
 		// Only send non-nil errors to the results pipe
 		if err := op(ctx); err != nil {
 			sendToPipe(pipe, err)
@@ -418,8 +414,7 @@ func (meg multiErrGroup) Go(op func(context.Context) error) {
 func (meg multiErrGroup) Wait() MultiError {
 	meg.doWait()
 	err := CombineErrors(*meg.res...)
-	ctx, _ := meg.g.getContext()
-	if cause := context.Cause(ctx); cause != nil {
+	if cause := context.Cause(meg.readGroup.ctx); cause != nil {
 		return CombineErrors(cause, err)
 	}
 	return err
@@ -443,7 +438,7 @@ type collectingMultiErrGroup[T any] struct {
 
 func (ceg collectingMultiErrGroup[T]) Go(op func(context.Context) (T, error)) {
 	pipe := ceg.pipe // Don't capture a pointer to the group
-	ceg.g.Go(func(ctx context.Context) {
+	ceg.writeGroup.Go(func(ctx context.Context) {
 		value, err := op(ctx)
 		sendToPipe(pipe, withErr[T]{value, err})
 	})
@@ -452,8 +447,7 @@ func (ceg collectingMultiErrGroup[T]) Go(op func(context.Context) (T, error)) {
 func (ceg collectingMultiErrGroup[T]) Wait() ([]T, MultiError) {
 	ceg.doWait()
 	res, err := ceg.res.values, CombineErrors(ceg.res.errs...)
-	ctx, _ := ceg.g.getContext()
-	if cause := context.Cause(ctx); cause != nil {
+	if cause := context.Cause(ceg.readGroup.ctx); cause != nil {
 		return res, CombineErrors(cause, err)
 	}
 	return res, err
@@ -467,7 +461,7 @@ type feedingMultiErrGroup[T any] struct {
 
 func (feg feedingMultiErrGroup[T]) Go(op func(context.Context) (T, error)) {
 	pipe := feg.pipe // Don't capture a pointer to the group
-	feg.g.Go(func(ctx context.Context) {
+	feg.writeGroup.Go(func(ctx context.Context) {
 		value, err := op(ctx)
 		sendToPipe(pipe, withErr[T]{value, err})
 	})
@@ -476,8 +470,7 @@ func (feg feedingMultiErrGroup[T]) Go(op func(context.Context) (T, error)) {
 func (feg feedingMultiErrGroup[T]) Wait() MultiError {
 	feg.doWait()
 	err := CombineErrors(*feg.res...)
-	ctx, _ := feg.g.getContext()
-	if cause := context.Cause(ctx); cause != nil {
+	if cause := context.Cause(feg.readGroup.ctx); cause != nil {
 		return CombineErrors(cause, err)
 	}
 	return err
@@ -488,8 +481,8 @@ type readWriteGroup[T any] struct {
 }
 
 func (rwg readWriteGroup[T]) GoWrite(writer func(context.Context, chan<- T) error) {
-	pipe, cancel := rwg.pipe, rwg.pipeWorkers.cancel // Don't capture a pointer to the executor
-	rwg.g.Go(func(ctx context.Context) {
+	pipe, cancel := rwg.pipe, rwg.readGroup.cancel // Don't capture a pointer to the executor
+	rwg.writeGroup.Go(func(ctx context.Context) {
 		err := writer(ctx, pipe)
 		if err != nil {
 			cancel(err)
@@ -498,8 +491,8 @@ func (rwg readWriteGroup[T]) GoWrite(writer func(context.Context, chan<- T) erro
 }
 
 func (rwg readWriteGroup[T]) GoRead(writer func(context.Context, <-chan T) error) {
-	pipe, cancel := rwg.pipe, rwg.pipeWorkers.cancel // Don't capture a pointer to the executor
-	rwg.pipeWorkers.Go(func(ctx context.Context) {
+	pipe, cancel := rwg.pipe, rwg.readGroup.cancel // Don't capture a pointer to the executor
+	rwg.readGroup.Go(func(ctx context.Context) {
 		err := writer(ctx, pipe)
 		if err != nil {
 			cancel(err)
@@ -509,5 +502,5 @@ func (rwg readWriteGroup[T]) GoRead(writer func(context.Context, <-chan T) error
 
 func (rwg readWriteGroup[T]) Wait() error {
 	rwg.doWait()
-	return context.Cause(rwg.pipeWorkers.ctx)
+	return context.Cause(rwg.readGroup.ctx)
 }

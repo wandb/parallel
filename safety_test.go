@@ -242,7 +242,7 @@ func TestPanicFeedWorkSecondPath(t *testing.T) {
 	g.Go(func(context.Context) (int, error) {
 		panic("oh no!")
 	})
-	ctx, _ := g.(feedingGroup[int]).g.getContext()
+	ctx, _ := g.(feedingGroup[int]).writeGroup.getContext()
 	<-ctx.Done()
 	assert.PanicsWithValue(t, "oh no!", func() {
 		g.Go(func(context.Context) (int, error) { return 2, nil })
@@ -294,7 +294,7 @@ func TestPanicFeedErrWorkSecondPath(t *testing.T) {
 	g.Go(func(context.Context) (int, error) {
 		panic("oh no!")
 	})
-	ctx, _ := g.(feedingMultiErrGroup[int]).g.getContext()
+	ctx, _ := g.(feedingMultiErrGroup[int]).writeGroup.getContext()
 	<-ctx.Done()
 	assert.PanicsWithValue(t, "oh no!", func() {
 		g.Go(func(context.Context) (int, error) { return 2, nil })
