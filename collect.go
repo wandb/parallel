@@ -97,6 +97,35 @@ type FeedingAllErrsExecutor[T any] interface {
 	Wait() MultiError
 }
 
+type ReadWriteExecutor[T any] interface {
+	// Run a function that will read from the group's channel, which is received
+	// as an argument. Typically such a function will receive values by using
+	// for-range over the input channel, returning only when the channel is
+	// closed.
+	//
+	// If the provided function returns a non-nil error, the executor is
+	// considered to be aborted. The context will be canceled and Wait() will
+	// return that error (or another).
+	GoRead(func(context.Context, <-chan T) error)
+	// Run a function that will write into the group's channel, which is
+	// received as an argument. The provided function may write as many values
+	// as desired into the channel.
+	//
+	// IT IS A MISUSE TO CLOSE THE CHANNEL. The channel will be closed
+	// automatically by the executor; to finish writing, simply return nil; to
+	// abort the executor, return a non-nil error. Closing the channel from
+	// within a write worker will probably result in a panic.
+	//
+	// If the provided function returns a non-nil error, the executor is
+	// considered to be aborted. The context will be canceled and Wait() will
+	// return that error (or another).
+	GoWrite(func(context.Context, chan<- T) error)
+	// Wait blocks until all writers have returned, closes the channel, waits
+	// until all readers have returned, and then returns any error received from
+	// any of the readers or writers, or nil if no error was seen.
+	Wait() error
+}
+
 // Returns an executor that halts if any submitted task returns an error, and
 // returns one error from Wait() if any occurred.
 func ErrGroup(executor Executor) ErrGroupExecutor {
@@ -221,6 +250,16 @@ func FeedWithErrs[T any](executor Executor, receiver func(context.Context, T) er
 		}
 	})
 	return making
+}
+
+// Returns an executor that allows both readers and writers. The number of
+// readers is unbounded; the writers will be run on the provided executor.
+//
+// If only one thread performing these reads is desired, and the logic for
+// receiving an item is very simple, consider using Feed or FeedWithErrs
+// instead.
+func ReadWrite[T any](writerExecutor Executor) ReadWriteExecutor[T] {
+	return readWriteGroup[T]{makePipeGroup[T, struct{}](writerExecutor)}
 }
 
 var _ ErrGroupExecutor = &errGroup{}
@@ -357,8 +396,7 @@ func (fg feedingGroup[T]) Go(op func(context.Context) (T, error)) {
 
 func (fg feedingGroup[T]) Wait() error {
 	fg.doWait()
-	ctx, _ := fg.g.getContext()
-	return context.Cause(ctx)
+	return context.Cause(fg.pipeWorkers.ctx)
 }
 
 var _ AllErrsExecutor = multiErrGroup{}
@@ -443,4 +481,33 @@ func (feg feedingMultiErrGroup[T]) Wait() MultiError {
 		return CombineErrors(cause, err)
 	}
 	return err
+}
+
+type readWriteGroup[T any] struct {
+	*pipeGroup[T, struct{}]
+}
+
+func (rwg readWriteGroup[T]) GoWrite(writer func(context.Context, chan<- T) error) {
+	pipe, cancel := rwg.pipe, rwg.pipeWorkers.cancel // Don't capture a pointer to the executor
+	rwg.g.Go(func(ctx context.Context) {
+		err := writer(ctx, pipe)
+		if err != nil {
+			cancel(err)
+		}
+	})
+}
+
+func (rwg readWriteGroup[T]) GoRead(writer func(context.Context, <-chan T) error) {
+	pipe, cancel := rwg.pipe, rwg.pipeWorkers.cancel // Don't capture a pointer to the executor
+	rwg.pipeWorkers.Go(func(ctx context.Context) {
+		err := writer(ctx, pipe)
+		if err != nil {
+			cancel(err)
+		}
+	})
+}
+
+func (rwg readWriteGroup[T]) Wait() error {
+	rwg.doWait()
+	return context.Cause(rwg.pipeWorkers.ctx)
 }
