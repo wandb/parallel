@@ -21,3 +21,5 @@ jobs:
       - uses: actions/setup-go@v5
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v4
+        with:
+          skip-cache: true
