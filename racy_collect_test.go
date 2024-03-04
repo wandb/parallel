@@ -5,10 +5,9 @@ package parallel
 import (
 	"context"
 	"errors"
-	"testing"
-	"time"
-
 	"github.com/stretchr/testify/assert"
+	"runtime"
+	"testing"
 )
 
 // The tests in this file are detected as racy by the race condition checker
@@ -27,7 +26,7 @@ func TestGatherErrCanceled(t *testing.T) {
 	})
 	// Hack: wait for the error to be definitely collected
 	for len(*g.(multiErrGroup).res) == 0 {
-		time.Sleep(0)
+		runtime.Gosched()
 	}
 	cancel()
 	err := g.Wait()
@@ -49,7 +48,7 @@ func TestCollectWithErrsCanceled(t *testing.T) {
 	})
 	// Hack: wait for the error to be definitely collected
 	for len(g.(collectingMultiErrGroup[int]).res.errs) == 0 {
-		time.Sleep(0)
+		runtime.Gosched()
 	}
 	cancel()
 	_, err := g.Wait()
@@ -70,7 +69,7 @@ func TestFeedWithErrsCanceled(t *testing.T) {
 	})
 	// Hack: wait for the error to be definitely collected
 	for len(*g.(feedingMultiErrGroup[int]).res) == 0 {
-		time.Sleep(0)
+		runtime.Gosched()
 	}
 	cancel()
 	err := g.Wait()
