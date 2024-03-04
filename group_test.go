@@ -2,10 +2,10 @@ package parallel
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -148,9 +148,9 @@ func testLimitedGroupMaxConcurrency(t *testing.T, name string, g Executor, limit
 		// All the workers we *expect* to see have shown up now. Throw away all
 		// the poison pills in the ops queue
 		for poisonPill := range g.(*limitedGroup).ops {
-			time.Sleep(0) // Trigger preemption as much as we can
+			runtime.Gosched() // Trigger preemption as much as we can
 			assert.NotNil(t, poisonPill)
-			time.Sleep(0) // Trigger preemption as much as we can
+			runtime.Gosched() // Trigger preemption as much as we can
 		}
 		blocker.Done() // unblock the workers
 		if shouldSucceed {
