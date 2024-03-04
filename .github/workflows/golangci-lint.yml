@@ -13,11 +13,11 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-go@v4
       - uses: actions/checkout@v4
         # the default behavior of checkout is to merge master into the PR branch,
         # this forces checkout to run the actual HEAD
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@v5
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v4
