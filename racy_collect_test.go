@@ -5,9 +5,10 @@ package parallel
 import (
 	"context"
 	"errors"
-	"github.com/stretchr/testify/assert"
 	"runtime"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // The tests in this file are detected as racy by the race condition checker
