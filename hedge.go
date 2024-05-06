@@ -41,7 +41,7 @@ func HedgedRequest[T any](
 	}
 	cfg.Apply(opts...)
 
-	hedgeSignal := make(chan struct{}) // will be closed when hedged requests should be fire.
+	hedgeSignal := make(chan struct{}) // closed when hedged requests should fire
 	responses := make(chan T)          // unbuffered, we only expect one response
 	ctx, cancel := context.WithCancelCause(ctx)
 
