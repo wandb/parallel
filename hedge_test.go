@@ -45,7 +45,7 @@ func TestHedgedRequestHedgingTriggered(t *testing.T) {
 				return "fail", ctx.Err()
 			}
 		} else {
-			return "success", nil
+			return expectedResult, nil
 		}
 	}
 
@@ -82,5 +82,6 @@ func TestHedgedRequestCancellation(t *testing.T) {
 	}()
 
 	_, err := HedgedRequest[string](ctx, requester)
+
 	require.ErrorIs(t, err, context.Canceled)
 }
