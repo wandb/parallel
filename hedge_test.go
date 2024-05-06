@@ -1,13 +1,14 @@
 package parallel
 
 import (
-	"time"
 	"context"
-	"testing"
-	"github.com/stretchr/testify/require"
-	"github.com/stretchr/testify/assert"
-	"fmt"
 	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHedgedRequestBasic(t *testing.T) {
