@@ -13,8 +13,8 @@ type ErrGroupExecutor interface {
 	// Panics if Wait() has already been called.
 	// May panic if any submitted task has already panicked.
 	Go(func(context.Context) error)
-	// Wait waits until all submitted tasks have completed, then returns a
-	// MultiError of any errors that were returned by submitted tasks (or nil).
+	// Wait waits until all submitted tasks have completed, then returns one
+	// error if any errors were returned by submitted tasks (or nil).
 	//
 	// After waiting, panics if any submitted task panicked.
 	Wait() error
