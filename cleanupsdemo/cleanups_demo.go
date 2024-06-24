@@ -59,11 +59,17 @@ func main() {
 
 	println("monitoring and running GC...")
 
-	var lastGoroutineCount int
+	numGoroutines := runtime.NumGoroutine()
+	lastGoroutineCount := numGoroutines
 	noProgressFor := 0
-	for numGoroutines := runtime.NumGoroutine(); numGoroutines > 1; numGoroutines = runtime.NumGoroutine() {
+	for {
+		println("number of goroutines:", numGoroutines)
+		if numGoroutines == 1 {
+			break
+		}
+
 		if numGoroutines >= lastGoroutineCount {
-			noProgressFor++
+			noProgressFor++ // no progress was made
 			if noProgressFor > 3 {
 				println("GC is not making progress! :(")
 				os.Exit(1)
@@ -71,16 +77,13 @@ func main() {
 			// Don't update lastGoroutineCount if the value went *up* (why would it
 			// do that? no idea, but might as well guard against it)
 		} else {
-			noProgressFor = 0
+			noProgressFor = 0 // progress was made
 			lastGoroutineCount = numGoroutines
 		}
 
-		println("number of goroutines:", numGoroutines)
-		if numGoroutines == 1 {
-			break
-		}
-		time.After(50 * time.Millisecond)
+		<-time.After(50 * time.Millisecond)
 		runtime.GC() // keep looking for garbage
+		numGoroutines = runtime.NumGoroutine()
 	}
 	println("tadaa! \U0001f389")
 	os.Exit(0)
