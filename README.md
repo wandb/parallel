@@ -140,7 +140,7 @@ For the more complex chore of running work that produces results which are aggre
    err.One()           // "uh oh" - one of the original errors!
    err.Unwrap()        // []error{ "uh oh", "bad foo", "bad bar" }
    // As shown, this even flattens other MultiErrors we return, if we need
-   // to send multiple (see Combine())
+   // to send multiple (see CombineErrors())
    ```
 * `parallel.CollectWithErrs[T](executor)`, for `func(context.Context) (T, error)`
    * `MultiError`-returning version of `Collect[T]` which, like `GatherErrs`, does not halt when an error occurs

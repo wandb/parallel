@@ -37,7 +37,7 @@ func TestMultiErrorMessage(t *testing.T) {
 		"foo\nbar\nbaz",
 	)
 	// Naively created MultiErrors with nils in them should still contain those
-	// nils; only Combine tries to strip those out.
+	// nils; only CombineErrors tries to strip those out.
 	assert.Equal(t,
 		parallel.NewMultiError(
 			errors.New("foo"),
