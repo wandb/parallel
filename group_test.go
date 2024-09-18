@@ -170,3 +170,46 @@ func TestLimitedGroupMaxConcurrency(t *testing.T) {
 	// Validate the test
 	testLimitedGroupMaxConcurrency(t, "fail", Limited(context.Background(), 6), 5, false)
 }
+
+func TestConcurrentGroupWaitReallyWaits(t *testing.T) {
+	testConcurrentGroupWaitReallyWaits(t, "Unlimited", Unlimited(context.Background()))
+	testConcurrentGroupWaitReallyWaits(t, "Limited", Limited(context.Background(), 2))
+}
+
+func testConcurrentGroupWaitReallyWaits(t *testing.T, name string, g Executor) {
+	const parallelWaiters = 100
+	t.Run(name, func(t *testing.T) {
+		var blocker sync.WaitGroup
+		blocker.Add(1)
+		g.Go(func(context.Context) {
+			blocker.Wait()
+		})
+
+		failureCanary := make(chan struct{}, parallelWaiters)
+
+		// Wait for the group many times concurrently
+		testingGroup := Unlimited(context.Background())
+		for i := 0; i < parallelWaiters; i++ {
+			testingGroup.Go(func(context.Context) {
+				g.Wait()
+				failureCanary <- struct{}{}
+			})
+		}
+
+		// Give the testing group lots and lots of chances to make progress
+		for i := 0; i < 100000; i++ {
+			select {
+			case <-failureCanary:
+				t.Fatal("a Wait() call made progress when it shouldn't!")
+			default:
+			}
+			runtime.Gosched()
+		}
+		// Clean up
+		blocker.Done()
+		for i := 0; i < parallelWaiters; i++ {
+			<-failureCanary
+		}
+		testingGroup.Wait()
+	})
+}
