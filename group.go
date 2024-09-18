@@ -95,7 +95,7 @@ func (n *runner) Go(op func(context.Context)) {
 }
 
 func (n *runner) Wait() {
-	n.awaited.Swap(true)
+	n.awaited.Store(true)
 }
 
 func (n *runner) getContext() (context.Context, context.CancelCauseFunc) {
@@ -146,9 +146,8 @@ func (g *group) Go(op func(context.Context)) {
 }
 
 func (g *group) Wait() {
-	if !g.awaited.Swap(true) {
-		g.wg.Wait()
-	}
+	g.awaited.Store(true)
+	g.wg.Wait()
 	g.checkPanic()
 }
 
