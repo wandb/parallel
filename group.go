@@ -61,7 +61,11 @@ func Unlimited(ctx context.Context) Executor {
 func Limited(ctx context.Context, maxGoroutines int) Executor {
 	if maxGoroutines < 1 {
 		gctx, cancel := context.WithCancelCause(ctx)
-		return &runner{ctx: gctx, cancel: cancel}
+		g := &runner{ctx: gctx, cancel: cancel}
+		runtime.SetFinalizer(g, func(doomed *runner) {
+			doomed.cancel(nil)
+		})
+		return g
 	}
 	making := &limitedGroup{
 		g:   makeGroup(context.WithCancelCause(ctx)),
@@ -96,6 +100,10 @@ func (n *runner) Go(op func(context.Context)) {
 
 func (n *runner) Wait() {
 	n.awaited.Store(true)
+	// We are ending the group's lifetime within this function call; defer the
+	// cancelation and unset our finalizer.
+	n.cancel(nil)
+	runtime.SetFinalizer(n, nil)
 }
 
 func (n *runner) getContext() (context.Context, context.CancelCauseFunc) {
@@ -103,7 +111,11 @@ func (n *runner) getContext() (context.Context, context.CancelCauseFunc) {
 }
 
 func makeGroup(ctx context.Context, cancel context.CancelCauseFunc) *group {
-	return &group{runner: runner{ctx: ctx, cancel: cancel}}
+	g := &group{runner: runner{ctx: ctx, cancel: cancel}}
+	runtime.SetFinalizer(g, func(doomed *group) {
+		doomed.cancel(nil)
+	})
+	return g
 }
 
 // Base concurrent executor
@@ -147,6 +159,10 @@ func (g *group) Go(op func(context.Context)) {
 
 func (g *group) Wait() {
 	g.awaited.Store(true)
+	// We are ending the group's lifetime within this function call; defer the
+	// cancelation and unset our finalizer.
+	defer g.cancel(nil)
+	runtime.SetFinalizer(g, nil)
 	g.wg.Wait()
 	g.checkPanic()
 }
