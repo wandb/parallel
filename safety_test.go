@@ -39,7 +39,7 @@ func TestLimitedGroupCleanup(t *testing.T) {
 		op(nil) // have mercy and run those ops anyway, just so we get a full count
 	}
 	// The channel should get closed!
-	assert.Equal(t, int64(100), counter)
+	assert.Equal(t, int64(100), atomic.LoadInt64(&counter))
 }
 
 func TestCollectorCleanup(t *testing.T) {
