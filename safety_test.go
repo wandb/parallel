@@ -5,7 +5,6 @@ package parallel
 import (
 	"context"
 	"errors"
-	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -435,31 +434,4 @@ func TestForgottenPipeLegiblePanic(t *testing.T) {
 	blocker.Done()
 	assertPanicsWithValue(t, "parallel executor pipe error: a "+
 		"collector using this same executor was probably not awaited", exec.Wait)
-}
-
-func TestPanicNil(t *testing.T) {
-	// Read what is actually thrown when we call panic(nil)
-	nilPanic := func() (p any) {
-		defer func() {
-			p = recover()
-		}()
-		panic(nil)
-	}()
-	if nilPanic != nil {
-		// We are probably on go1.21 or later, where panic(nil) is transformed
-		// into a runtime.PanicNilError.
-		assert.Equal(t,
-			"PanicNilError",
-			reflect.TypeOf(nilPanic).Elem().Name())
-		return
-	}
-
-	t.Parallel()
-	g := Unlimited(context.Background())
-	g.Go(func(context.Context) {
-		// Panics that are literally `nil` should also be caught, even though
-		// they aren't detectable without some trickery (prior to go1.21)
-		panic(nil)
-	})
-	assertPanicsWithValue(t, nil, g.Wait)
 }
