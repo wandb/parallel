@@ -156,7 +156,7 @@ func testLimitedGroupMaxConcurrency(t *testing.T, name string, g Executor, limit
 		if shouldSucceed {
 			assert.NotPanics(t, jobInserter.Wait)
 		} else {
-			assert.PanicsWithValue(t, "poison pill", jobInserter.Wait)
+			assertPanicsWithValue(t, "poison pill", jobInserter.Wait)
 		}
 	})
 }
@@ -212,4 +212,22 @@ func testConcurrentGroupWaitReallyWaits(t *testing.T, name string, g Executor) {
 		}
 		testingGroup.Wait()
 	})
+}
+
+func TestCanGoexit(t *testing.T) {
+	g := Unlimited(context.Background())
+	g.Go(func(context.Context) {
+		// Ideally we would test t.Fatal() here to show that parallel now plays
+		// nicely with the testing lib, but there doesn't seem to be any good
+		// way to xfail a golang test. As it happens t.Fatal() just sets a fail
+		// flag and then calls Goexit() anyway; if we treat nil recover() values
+		// as Goexit() (guaranteed since 1.21 with the advent of PanicNilError)
+		// we can handle this very simply, without needing a "double defer
+		// sandwich".
+		//
+		// Either way, we expect Goexit() to work normally in tests now and not
+		// fail or re-panic.
+		runtime.Goexit()
+	})
+	g.Wait()
 }
