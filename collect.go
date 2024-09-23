@@ -223,6 +223,16 @@ func FeedWithErrs[T any](executor Executor, receiver func(context.Context, T) er
 	return making
 }
 
+// groupError returns the error associated with a group's context; if the error
+// was errGroupDone, that doesn't count as an error and nil is returned instead.
+func groupError(ctx context.Context) error {
+	err := context.Cause(ctx)
+	if err == errGroupDone {
+		return nil
+	}
+	return err
+}
+
 var _ ErrGroupExecutor = &errGroup{}
 
 type errGroup struct {
@@ -242,7 +252,7 @@ func (eg *errGroup) Go(op func(context.Context) error) {
 func (eg *errGroup) Wait() error {
 	eg.g.Wait()
 	ctx, _ := eg.g.getContext()
-	return context.Cause(ctx)
+	return groupError(ctx)
 }
 
 func makePipeGroup[T any, R any](executor Executor) *pipeGroup[T, R] {
@@ -329,7 +339,7 @@ func (cg collectingGroup[T]) Go(op func(context.Context) (T, error)) {
 func (cg collectingGroup[T]) Wait() ([]T, error) {
 	cg.doWait()
 	ctx, _ := cg.g.getContext()
-	if err := context.Cause(ctx); err != nil {
+	if err := groupError(ctx); err != nil {
 		// We have an error; return it
 		return nil, err
 	}
@@ -358,7 +368,7 @@ func (fg feedingGroup[T]) Go(op func(context.Context) (T, error)) {
 func (fg feedingGroup[T]) Wait() error {
 	fg.doWait()
 	ctx, _ := fg.g.getContext()
-	return context.Cause(ctx)
+	return groupError(ctx)
 }
 
 var _ AllErrsExecutor = multiErrGroup{}
@@ -381,7 +391,7 @@ func (meg multiErrGroup) Wait() MultiError {
 	meg.doWait()
 	err := CombineErrors(*meg.res...)
 	ctx, _ := meg.g.getContext()
-	if cause := context.Cause(ctx); cause != nil {
+	if cause := groupError(ctx); cause != nil {
 		return CombineErrors(cause, err)
 	}
 	return err
@@ -415,7 +425,7 @@ func (ceg collectingMultiErrGroup[T]) Wait() ([]T, MultiError) {
 	ceg.doWait()
 	res, err := ceg.res.values, CombineErrors(ceg.res.errs...)
 	ctx, _ := ceg.g.getContext()
-	if cause := context.Cause(ctx); cause != nil {
+	if cause := groupError(ctx); cause != nil {
 		return res, CombineErrors(cause, err)
 	}
 	return res, err
@@ -439,7 +449,7 @@ func (feg feedingMultiErrGroup[T]) Wait() MultiError {
 	feg.doWait()
 	err := CombineErrors(*feg.res...)
 	ctx, _ := feg.g.getContext()
-	if cause := context.Cause(ctx); cause != nil {
+	if cause := groupError(ctx); cause != nil {
 		return CombineErrors(cause, err)
 	}
 	return err

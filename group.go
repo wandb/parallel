@@ -15,7 +15,14 @@ const bufferSize = 8
 
 const misuseMessage = "parallel executor misuse: don't reuse executors"
 
-var errPanicked = errors.New("panicked")
+var (
+	errPanicked       = errors.New("panicked")
+	errGroupDone      = errors.New("executor done")
+	errGroupAbandoned = errors.New("executor abandoned")
+
+	// Contexts are canceled with this error when executors are awaited.
+	GroupDoneError = errGroupDone
+)
 
 // NOTE: If you want to really get crazy with it, it IS permissible and safe to
 // call Go(...) from multiple threads without additional synchronization, on
@@ -63,7 +70,7 @@ func Limited(ctx context.Context, maxGoroutines int) Executor {
 		gctx, cancel := context.WithCancelCause(ctx)
 		g := &runner{ctx: gctx, cancel: cancel}
 		runtime.SetFinalizer(g, func(doomed *runner) {
-			doomed.cancel(nil)
+			doomed.cancel(errGroupAbandoned)
 		})
 		return g
 	}
@@ -74,7 +81,7 @@ func Limited(ctx context.Context, maxGoroutines int) Executor {
 	}
 	runtime.SetFinalizer(making, func(doomed *limitedGroup) {
 		close(doomed.ops)
-		doomed.g.cancel(nil)
+		doomed.g.cancel(errGroupAbandoned)
 	})
 	return making
 }
@@ -102,7 +109,7 @@ func (n *runner) Wait() {
 	n.awaited.Store(true)
 	// We are ending the group's lifetime within this function call; defer the
 	// cancelation and unset our finalizer.
-	n.cancel(nil)
+	n.cancel(errGroupDone)
 	runtime.SetFinalizer(n, nil)
 }
 
@@ -113,7 +120,7 @@ func (n *runner) getContext() (context.Context, context.CancelCauseFunc) {
 func makeGroup(ctx context.Context, cancel context.CancelCauseFunc) *group {
 	g := &group{runner: runner{ctx: ctx, cancel: cancel}}
 	runtime.SetFinalizer(g, func(doomed *group) {
-		doomed.cancel(nil)
+		doomed.cancel(errGroupAbandoned)
 	})
 	return g
 }
@@ -161,7 +168,7 @@ func (g *group) Wait() {
 	g.awaited.Store(true)
 	// We are ending the group's lifetime within this function call; defer the
 	// cancelation and unset our finalizer.
-	defer g.cancel(nil)
+	defer g.cancel(errGroupDone)
 	runtime.SetFinalizer(g, nil)
 	g.wg.Wait()
 	g.checkPanic()
