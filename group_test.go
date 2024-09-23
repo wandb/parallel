@@ -10,6 +10,20 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func assertPanicsWithValue(t *testing.T, expectedValue any, f func()) {
+	t.Helper()
+
+	defer func() {
+		p := recover()
+		if p == nil {
+			t.Fatal("didn't panic but should have")
+		}
+		assert.Equal(t, expectedValue, p.(WorkerPanic).Panic)
+	}()
+
+	f()
+}
+
 func TestGroup(t *testing.T) {
 	for _, test := range []struct {
 		name     string

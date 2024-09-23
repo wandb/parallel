@@ -13,20 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func assertPanicsWithValue(t *testing.T, expectedValue any, f func()) {
-	t.Helper()
-
-	defer func() {
-		p := recover()
-		if p == nil {
-			t.Fatal("didn't panic but should have")
-		}
-		assert.Equal(t, expectedValue, p.(WorkerPanic).Panic)
-	}()
-
-	f()
-}
-
 // The tests in this file can be detected as racy by the race condition checker
 // because we are reaching under the hood to look at the group's channel, so we
 // can see when the group's functions have started running. There's no good
