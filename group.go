@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 )
@@ -16,6 +17,18 @@ const bufferSize = 8
 const misuseMessage = "parallel executor misuse: don't reuse executors"
 
 var errPanicked = errors.New("panicked")
+
+// WorkerPanic represents a panic value propagated from a task within a parallel
+// executor, and is the main type of panic that you might expect to receive.
+type WorkerPanic struct {
+	// Panic contains the originally panic()ed value.
+	Panic any
+	// Stacktraces contains the stacktraces of the panics. The stack trace of
+	// the line that threw the original Panic value appears first, and any other
+	// stack traces from other parallel groups that received this panic and re-
+	// threw it appear in order afterwards.
+	Stacktraces []string
+}
 
 // NOTE: If you want to really get crazy with it, it IS permissible and safe to
 // call Go(...) from multiple threads without additional synchronization, on
@@ -110,7 +123,7 @@ func makeGroup(ctx context.Context, cancel context.CancelCauseFunc) *group {
 type group struct {
 	runner
 	wg       sync.WaitGroup
-	panicked atomic.Pointer[any] // Stores panic values
+	panicked atomic.Pointer[WorkerPanic] // Stores panic values
 }
 
 func (g *group) Go(op func(context.Context)) {
@@ -131,12 +144,34 @@ func (g *group) Go(op func(context.Context)) {
 				// When the function call has exited without returning, hoist
 				// the recover()ed panic value and a stack trace so it can be
 				// re-panicked.
-				//
-				// Currently we do not store stack traces from the panicked
-				// goroutine or distinguish between panics and runtime.Goexit().
 				p := recover()
-				g.panicked.CompareAndSwap(nil, &p)
-				g.cancel(errPanicked)
+				if p == nil {
+					// This is a runtime.Goexit(), such as from a process
+					// termination or a test failure; let that propagate instead
+					g.cancel(context.Canceled)
+				} else {
+					// If we are propagating a panic that is already a
+					// WorkerPanic (for example, if we have panics propagating
+					// through multiple parallel groups), just add our
+					// stacktrace onto the end of the slice; otherwise make a
+					// new WorkerPanic value.
+					var wp WorkerPanic
+					switch tp := p.(type) {
+					case WorkerPanic:
+						wp = WorkerPanic{
+							Panic:       tp.Panic,
+							Stacktraces: append(tp.Stacktraces, string(debug.Stack())),
+						}
+					default:
+						wp = WorkerPanic{
+							Panic:       p,
+							Stacktraces: []string{string(debug.Stack())},
+						}
+					}
+
+					g.panicked.CompareAndSwap(nil, &wp)
+					g.cancel(errPanicked)
+				}
 			}
 			g.wg.Done()
 		}()

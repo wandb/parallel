@@ -5,7 +5,6 @@ package parallel
 import (
 	"context"
 	"errors"
-	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -40,7 +39,7 @@ func TestLimitedGroupCleanup(t *testing.T) {
 		op(nil) // have mercy and run those ops anyway, just so we get a full count
 	}
 	// The channel should get closed!
-	assert.Equal(t, int64(100), counter)
+	assert.Equal(t, int64(100), atomic.LoadInt64(&counter))
 }
 
 func TestCollectorCleanup(t *testing.T) {
@@ -134,7 +133,7 @@ func TestPanicGroup(t *testing.T) {
 	// Wait for the group to "die" when the panic hits
 	ctx, _ := g.getContext()
 	<-ctx.Done()
-	assert.PanicsWithValue(t, "wow", func() {
+	assertPanicsWithValue(t, "wow", func() {
 		g.Wait()
 	})
 }
@@ -154,7 +153,7 @@ func TestPanicGroupSecondPath(t *testing.T) {
 	// Wait for the group to "die" when the panic hits
 	ctx, _ := g.getContext()
 	<-ctx.Done()
-	assert.PanicsWithValue(t, "wow", func() {
+	assertPanicsWithValue(t, "wow", func() {
 		g.Go(func(context.Context) {
 			t.Fatal("this op should never run")
 		})
@@ -179,7 +178,7 @@ func TestPanicLimitedGroup(t *testing.T) {
 	})
 	waitForNonPanic.Wait()
 	block.Done()
-	assert.PanicsWithValue(t, "lol", func() {
+	assertPanicsWithValue(t, "lol", func() {
 		g.Wait()
 	})
 }
@@ -202,7 +201,7 @@ func TestPanicLimitedGroupSecondPath(t *testing.T) {
 	})
 	waitForNonPanic.Wait()
 	block.Done()
-	assert.PanicsWithValue(t, "lol", func() {
+	assertPanicsWithValue(t, "lol", func() {
 		// Eventually :)
 		for {
 			g.Go(func(context.Context) {})
@@ -218,7 +217,7 @@ func TestPanicFeedFunction(t *testing.T) {
 	g.Go(func(context.Context) (int, error) {
 		return 1, nil
 	})
-	assert.PanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
+	assertPanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
 }
 
 func TestPanicFeedWork(t *testing.T) {
@@ -230,7 +229,7 @@ func TestPanicFeedWork(t *testing.T) {
 	g.Go(func(context.Context) (int, error) {
 		panic("oh no!")
 	})
-	assert.PanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
+	assertPanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
 }
 
 func TestPanicFeedWorkSecondPath(t *testing.T) {
@@ -244,7 +243,7 @@ func TestPanicFeedWorkSecondPath(t *testing.T) {
 	})
 	ctx, _ := g.(feedingGroup[int]).g.getContext()
 	<-ctx.Done()
-	assert.PanicsWithValue(t, "oh no!", func() {
+	assertPanicsWithValue(t, "oh no!", func() {
 		g.Go(func(context.Context) (int, error) { return 2, nil })
 	})
 }
@@ -270,7 +269,7 @@ func TestPanicFeedErrFunction(t *testing.T) {
 	g.Go(func(context.Context) (int, error) {
 		return 1, nil
 	})
-	assert.PanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
+	assertPanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
 }
 
 func TestPanicFeedErrWork(t *testing.T) {
@@ -282,7 +281,7 @@ func TestPanicFeedErrWork(t *testing.T) {
 	g.Go(func(context.Context) (int, error) {
 		panic("oh no!")
 	})
-	assert.PanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
+	assertPanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
 }
 
 func TestPanicFeedErrWorkSecondPath(t *testing.T) {
@@ -296,7 +295,7 @@ func TestPanicFeedErrWorkSecondPath(t *testing.T) {
 	})
 	ctx, _ := g.(feedingMultiErrGroup[int]).g.getContext()
 	<-ctx.Done()
-	assert.PanicsWithValue(t, "oh no!", func() {
+	assertPanicsWithValue(t, "oh no!", func() {
 		g.Go(func(context.Context) (int, error) { return 2, nil })
 	})
 }
@@ -380,10 +379,10 @@ func TestGroupsPanicAgain(t *testing.T) {
 				innerGroup.Go(func(context.Context) { panic("at the disco") })
 				innerGroup.Wait()
 			})
-			assert.PanicsWithValue(t, "at the disco", outerGroup.Wait)
-			assert.PanicsWithValue(t, "at the disco", innerGroup.Wait)
-			assert.PanicsWithValue(t, "at the disco", outerGroup.Wait)
-			assert.PanicsWithValue(t, "at the disco", innerGroup.Wait)
+			assertPanicsWithValue(t, "at the disco", outerGroup.Wait)
+			assertPanicsWithValue(t, "at the disco", innerGroup.Wait)
+			assertPanicsWithValue(t, "at the disco", outerGroup.Wait)
+			assertPanicsWithValue(t, "at the disco", innerGroup.Wait)
 		})
 	}
 }
@@ -392,8 +391,8 @@ func TestPipeGroupPanicsAgain(t *testing.T) {
 	t.Parallel()
 	g := Feed(Unlimited(context.Background()), func(context.Context, int) error { return nil })
 	g.Go(func(context.Context) (int, error) { panic("at the disco") })
-	assert.PanicsWithValue(t, "at the disco", func() { _ = g.Wait() })
-	assert.PanicsWithValue(t, "at the disco", func() { _ = g.Wait() })
+	assertPanicsWithValue(t, "at the disco", func() { _ = g.Wait() })
+	assertPanicsWithValue(t, "at the disco", func() { _ = g.Wait() })
 }
 
 func TestForgottenPipeLegiblePanic(t *testing.T) {
@@ -419,33 +418,6 @@ func TestForgottenPipeLegiblePanic(t *testing.T) {
 	// happens the panic will be stored in the executor, so we re-panic that
 	// specific error with a more diagnostic message.
 	blocker.Done()
-	assert.PanicsWithValue(t, "parallel executor pipe error: a "+
+	assertPanicsWithValue(t, "parallel executor pipe error: a "+
 		"collector using this same executor was probably not awaited", exec.Wait)
-}
-
-func TestPanicNil(t *testing.T) {
-	// Read what is actually thrown when we call panic(nil)
-	nilPanic := func() (p any) {
-		defer func() {
-			p = recover()
-		}()
-		panic(nil)
-	}()
-	if nilPanic != nil {
-		// We are probably on go1.21 or later, where panic(nil) is transformed
-		// into a runtime.PanicNilError.
-		assert.Equal(t,
-			"PanicNilError",
-			reflect.TypeOf(nilPanic).Elem().Name())
-		return
-	}
-
-	t.Parallel()
-	g := Unlimited(context.Background())
-	g.Go(func(context.Context) {
-		// Panics that are literally `nil` should also be caught, even though
-		// they aren't detectable without some trickery (prior to go1.21)
-		panic(nil)
-	})
-	assert.PanicsWithValue(t, nil, g.Wait)
 }
