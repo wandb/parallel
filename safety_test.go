@@ -12,44 +12,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
-
-type contextLeak struct {
-	lock sync.Mutex
-	ctxs []context.Context
-}
-
-func (c *contextLeak) leak(ctx context.Context) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	c.ctxs = append(c.ctxs, ctx)
-}
-
-func (c *contextLeak) assertAllCanceled(t *testing.T, expected ...error) {
-	t.Helper()
-	if len(expected) > 1 {
-		panic("please just provide 1 expected error for all the contexts")
-	}
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	for _, ctx := range c.ctxs {
-		cause := context.Cause(ctx)
-		if cause == nil {
-			t.Fatal("context was not canceled")
-		}
-		if len(expected) == 1 {
-			require.ErrorIs(t, cause, expected[0])
-		}
-	}
-}
-
-// Wait for all contexts to be done
-func (c *contextLeak) join() {
-	for _, ctx := range c.ctxs {
-		<-ctx.Done()
-	}
-}
 
 // The tests in this file can be detected as racy by the race condition checker
 // because we are reaching under the hood to look at the group's channel, so we
