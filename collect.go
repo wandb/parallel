@@ -300,6 +300,14 @@ func (pg *pipeGroup[T, R]) doWait() {
 	// even in case of a panic by deferring it, and that always only happens at
 	// the end of the function... so, we just put an inner function here to make
 	// it happen "early."
+
+	// Runs last: We must make completely certain that we cancel the context
+	// owned by the pipeGroup. This context is shared between the executor and
+	// the pipeWorkers; we take charge of making sure this cancelation happens
+	// as soon as possible here, and we want it to happen at the very end after
+	// everything else in case something else wanted to set the cancel cause of
+	// the context to an actual error instead of our "no error" sentinel value.
+	defer pg.pipeWorkers.cancel(errGroupDone)
 	func() {
 		// Runs second: Close the results chan and unblock the pipe worker.
 		// Because we're deferring this, it will happen even if there is a panic
@@ -315,7 +323,7 @@ func (pg *pipeGroup[T, R]) doWait() {
 		pg.g.quietWait()
 	}()
 	// Runs third: Wait for outputs to be done
-	pg.pipeWorkers.Wait()
+	pg.pipeWorkers.quietWait()
 }
 
 var _ CollectingExecutor[int] = collectingGroup[int]{}
