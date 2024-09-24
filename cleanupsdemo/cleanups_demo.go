@@ -13,6 +13,8 @@ func main() {
 	const cycles = 100
 	const batchSize = 100
 
+	ctx := context.Background()
+
 	// This demonstrates the library's cleanup functionality, where forgotten
 	// executors that own goroutines and have been discarded without being awaited
 	// will clean themselves up without permanently leaking goroutines. This is
@@ -22,14 +24,24 @@ func main() {
 	// of the thunks that are registered with `runtime.SetFinalizer()` in
 	// group.go and collect.go, which close channels and call cancel functions.
 
-	println("leaking ~", cycles*(batchSize+2), "goroutines from abandoned group executors...")
+	println("leaking goroutines from group executors...")
+
+	// Dependent contexts are always canceled, too
+	leakDependent := func(ctx context.Context) {
+		ctx, cancel := context.WithCancel(ctx)
+		_ = cancel
+		go func() {
+			<-ctx.Done()
+		}()
+	}
 
 	// Leak just a crazy number of goroutines
 	for i := 0; i < cycles; i++ {
 		func() {
-			g := parallel.Collect[int](parallel.Limited(context.Background(), batchSize))
+			g := parallel.Collect[int](parallel.Limited(ctx, batchSize))
 			for j := 0; j < batchSize; j++ {
-				g.Go(func(context.Context) (int, error) {
+				g.Go(func(ctx context.Context) (int, error) {
+					leakDependent(ctx)
 					return 1, nil
 				})
 			}
@@ -38,10 +50,11 @@ func main() {
 
 		func() {
 			defer func() { _ = recover() }()
-			g := parallel.Feed(parallel.Unlimited(context.Background()), func(context.Context, int) error {
+			g := parallel.Feed(parallel.Unlimited(ctx), func(context.Context, int) error {
 				panic("feed function panics")
 			})
-			g.Go(func(context.Context) (int, error) {
+			g.Go(func(ctx context.Context) (int, error) {
+				leakDependent(ctx)
 				return 1, nil
 			})
 			// Leak the group without awaiting it
@@ -49,12 +62,45 @@ func main() {
 
 		func() {
 			defer func() { _ = recover() }()
-			g := parallel.Collect[int](parallel.Unlimited(context.Background()))
-			g.Go(func(context.Context) (int, error) {
+			g := parallel.Collect[int](parallel.Unlimited(ctx))
+			g.Go(func(ctx context.Context) (int, error) {
+				leakDependent(ctx)
 				panic("op panics")
 			})
 			// Leak the group without awaiting it
 		}()
+
+		// Start some executors that complete normally without error
+		{
+			g := parallel.Unlimited(ctx)
+			g.Go(func(ctx context.Context) {
+				leakDependent(ctx)
+			})
+			g.Wait()
+		}
+		{
+			g := parallel.Collect[int](parallel.Limited(ctx, batchSize))
+			g.Go(func(ctx context.Context) (int, error) {
+				return 1, nil
+			})
+			_, err := g.Wait()
+			if err != nil {
+				panic(err)
+			}
+		}
+		{
+			g := parallel.Feed(parallel.Unlimited(ctx), func(context.Context, int) error {
+				return nil
+			})
+			g.Go(func(ctx context.Context) (int, error) {
+				leakDependent(ctx)
+				return 1, nil
+			})
+			err := g.Wait()
+			if err != nil {
+				panic(err)
+			}
+		}
 	}
 
 	println("monitoring and running GC...")
