@@ -44,8 +44,15 @@ func TestLimitedGroupCleanup(t *testing.T) {
 	}()
 	assert.NotNil(t, opsQueue)
 	runtime.GC() // Trigger cleanups for leaked resources
+
+	// In the event that we need to drain the ops queue below, we need to have
+	// a context to leak that satisfies our test predicate.
+	fakeCtx, cancel := context.WithCancelCause(context.Background())
+	// We can cancel the context immediately since we don't really use it
+	cancel(errGroupAbandoned)
+
 	for op := range opsQueue {
-		op(nil) // have mercy and run those ops anyway, just so we get a full count
+		op(fakeCtx) // have mercy and run those ops anyway, just so we get a full count
 	}
 	// The channel should get closed!
 	assert.Equal(t, int64(100), atomic.LoadInt64(&counter))
