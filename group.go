@@ -61,6 +61,9 @@ type Executor interface {
 
 	// internal
 	getContext() (context.Context, context.CancelCauseFunc)
+	// Waits without canceling the context with errGroupDone. The caller of this
+	// function promises that they will be responsible for canceling the context
+	quietWait()
 }
 
 // Creates a basic executor which runs all the functions given in one goroutine
@@ -119,10 +122,12 @@ func (n *runner) Go(op func(context.Context)) {
 }
 
 func (n *runner) Wait() {
-	n.awaited.Store(true)
-	// We are ending the group's lifetime within this function call; defer the
-	// cancelation and unset our finalizer.
+	n.quietWait()
 	n.cancel(errGroupDone)
+}
+
+func (n *runner) quietWait() {
+	n.awaited.Store(true)
 	runtime.SetFinalizer(n, nil)
 }
 
@@ -200,10 +205,12 @@ func (g *group) Go(op func(context.Context)) {
 }
 
 func (g *group) Wait() {
-	g.awaited.Store(true)
-	// We are ending the group's lifetime within this function call; defer the
-	// cancelation and unset our finalizer.
 	defer g.cancel(errGroupDone)
+	g.quietWait()
+}
+
+func (g *group) quietWait() {
+	g.awaited.Store(true)
 	runtime.SetFinalizer(g, nil)
 	g.wg.Wait()
 	g.checkPanic()
@@ -281,6 +288,14 @@ func (lg *limitedGroup) Wait() {
 		runtime.SetFinalizer(lg, nil) // Don't try to close this chan again :)
 	}
 	lg.g.Wait()
+}
+
+func (lg *limitedGroup) quietWait() {
+	if !lg.awaited.Swap(true) {
+		close(lg.ops)
+		runtime.SetFinalizer(lg, nil) // Don't try to close this chan again :)
+	}
+	lg.g.quietWait()
 }
 
 func (lg *limitedGroup) getContext() (context.Context, context.CancelCauseFunc) {

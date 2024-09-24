@@ -310,8 +310,9 @@ func (pg *pipeGroup[T, R]) doWait() {
 				runtime.SetFinalizer(pg, nil)
 			}
 		}()
-		// Runs first: Wait for inputs
-		pg.g.Wait()
+		// Runs first: Wait for inputs. Wait "quietly", not canceling the
+		// context yet so if there is an error later we can still see it
+		pg.g.quietWait()
 	}()
 	// Runs third: Wait for outputs to be done
 	pg.pipeWorkers.Wait()

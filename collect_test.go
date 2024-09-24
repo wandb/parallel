@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestErrGroup(t *testing.T) {
@@ -147,6 +148,26 @@ func TestFeedErroring(t *testing.T) {
 	g.Go(func(context.Context) (int, error) { return 4, errors.New("oops") })
 	assert.Errorf(t, g.Wait(), "oops")
 	assert.Subset(t, []int{1, 2, 3}, res)
+}
+
+func TestFeedLastReceiverErrs(t *testing.T) {
+	t.Parallel()
+	// Even when the very very last item through the pipe group causes an error,
+	// the group's context shouldn't be canceled yet and it should still be able
+	// to set the error.
+	g := Feed(Limited(context.Background(), 0), func(ctx context.Context, val int) error {
+		if val == 10 {
+			return errors.New("boom")
+		} else {
+			return nil
+		}
+	})
+	for i := 1; i <= 10; i++ {
+		g.Go(func(ctx context.Context) (int, error) {
+			return i, nil
+		})
+	}
+	require.Error(t, g.Wait())
 }
 
 func TestFeedErroringInReceiver(t *testing.T) {
