@@ -12,7 +12,44 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type contextLeak struct {
+	lock sync.Mutex
+	ctxs []context.Context
+}
+
+func (c *contextLeak) leak(ctx context.Context) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.ctxs = append(c.ctxs, ctx)
+}
+
+func (c *contextLeak) assertAllCanceled(t *testing.T, expected ...error) {
+	t.Helper()
+	if len(expected) > 1 {
+		panic("please just provide 1 expected error for all the contexts")
+	}
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	for _, ctx := range c.ctxs {
+		cause := context.Cause(ctx)
+		if cause == nil {
+			t.Fatal("context was not canceled")
+		}
+		if len(expected) == 1 {
+			require.ErrorIs(t, cause, expected[0])
+		}
+	}
+}
+
+// Wait for all contexts to be done
+func (c *contextLeak) join() {
+	for _, ctx := range c.ctxs {
+		<-ctx.Done()
+	}
+}
 
 // The tests in this file can be detected as racy by the race condition checker
 // because we are reaching under the hood to look at the group's channel, so we
@@ -24,11 +61,20 @@ import (
 func TestLimitedGroupCleanup(t *testing.T) {
 	t.Parallel()
 	var counter int64
+	var leak contextLeak
+
 	opsQueue := func() chan func(context.Context) {
 		g := Limited(context.Background(), 10)
 		for i := 0; i < 100; i++ {
-			g.Go(func(context.Context) {
+			g.Go(func(ctx context.Context) {
+				defer func() {
+					p := recover()
+					if p != nil {
+						println(p)
+					}
+				}()
 				atomic.AddInt64(&counter, 1)
+				leak.leak(ctx)
 			})
 		}
 		return g.(*limitedGroup).ops
@@ -41,90 +87,128 @@ func TestLimitedGroupCleanup(t *testing.T) {
 	}
 	// The channel should get closed!
 	assert.Equal(t, int64(100), counter)
+	leak.assertAllCanceled(t, errGroupAbandoned)
 }
 
 func TestCollectorCleanup(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	valuePipe := func() chan int {
 		g := Collect[int](Unlimited(context.Background()))
-		g.Go(func(context.Context) (int, error) { return 1, nil })
+		g.Go(func(ctx context.Context) (int, error) {
+			leak.leak(ctx)
+			return 1, nil
+		})
 		return g.(collectingGroup[int]).pipe
 		// leak the un-awaited group
 	}()
 	assert.NotNil(t, valuePipe)
-	runtime.GC() // Trigger cleanups for leaked resources
+	runtime.GC() // Trigger cleanup of the collector
+	runtime.GC() // Trigger cleanup of the executor it owned
+	runtime.GC() // One more for good measure
 	for range valuePipe {
+		// The channel should get closed!
 	}
-	// The channel should get closed!
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
 }
 
 func TestFeederCleanup(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	valuePipe := func() chan int {
 		g := Feed[int](Unlimited(context.Background()), func(context.Context, int) error { return nil })
-		g.Go(func(context.Context) (int, error) { return 1, nil })
+		g.Go(func(ctx context.Context) (int, error) {
+			leak.leak(ctx)
+			return 1, nil
+		})
 		return g.(feedingGroup[int]).pipe
 		// leak the un-awaited group
 	}()
 	assert.NotNil(t, valuePipe)
-	runtime.GC() // Trigger cleanups for leaked resources
+	runtime.GC() // Trigger cleanup of the feeder
+	runtime.GC() // Trigger cleanup of the executor it owned
+	runtime.GC() // One more for good measure
 	for range valuePipe {
+		// The channel should get closed!
 	}
-	// The channel should get closed!
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
 }
 
 func TestGatherErrCleanup(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	valuePipe := func() chan error {
 		g := GatherErrs(Unlimited(context.Background()))
-		g.Go(func(context.Context) error { return nil })
+		g.Go(func(ctx context.Context) error {
+			leak.leak(ctx)
+			return nil
+		})
 		return g.(multiErrGroup).pipe
 		// leak the un-awaited group
 	}()
 	assert.NotNil(t, valuePipe)
-	runtime.GC() // Trigger cleanups for leaked resources
+	runtime.GC() // Trigger cleanup of the gatherer
+	runtime.GC() // Trigger cleanup of the executor it owned
+	runtime.GC() // One more for good measure
 	for range valuePipe {
+		// The channel should get closed!
 	}
-	// The channel should get closed!
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
 }
 
 func TestCollectWithErrsCleanup(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	valuePipe := func() chan withErr[int] {
 		g := CollectWithErrs[int](Unlimited(context.Background()))
-		g.Go(func(context.Context) (int, error) { return 1, nil })
+		g.Go(func(ctx context.Context) (int, error) {
+			leak.leak(ctx)
+			return 1, nil
+		})
 		return g.(collectingMultiErrGroup[int]).pipe
 		// leak the un-awaited group
 	}()
 	assert.NotNil(t, valuePipe)
-	runtime.GC() // Trigger cleanups for leaked resources
+	runtime.GC() // Trigger cleanup of the collector
+	runtime.GC() // Trigger cleanup of the executor it owned
+	runtime.GC() // One more for good measure
 	for range valuePipe {
+		// The channel should get closed!
 	}
-	// The channel should get closed!
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
 }
 
 func TestFeedWithErrsCleanup(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	valuePipe := func() chan withErr[int] {
 		g := FeedWithErrs(Unlimited(context.Background()),
 			func(context.Context, int) error { return nil })
-		g.Go(func(context.Context) (int, error) { return 1, nil })
+		g.Go(func(ctx context.Context) (int, error) {
+			leak.leak(ctx)
+			return 1, nil
+		})
 		return g.(feedingMultiErrGroup[int]).pipe
 		// leak the un-awaited group
 	}()
 	assert.NotNil(t, valuePipe)
-	runtime.GC() // Trigger cleanups for leaked resources
+	runtime.GC() // Trigger cleanup of the collector
+	runtime.GC() // Trigger cleanup of the executor it owned
+	runtime.GC() // One more for good measure
 	for range valuePipe {
+		// The channel should get closed!
 	}
-	// The channel should get closed!
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
 }
 
 func TestPanicGroup(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	g := Unlimited(context.Background())
 	var blocker sync.WaitGroup
 	blocker.Add(1)
-	g.Go(func(context.Context) {
+	g.Go(func(ctx context.Context) {
+		leak.leak(ctx)
 		blocker.Wait()
 		panic("wow")
 	})
@@ -137,14 +221,17 @@ func TestPanicGroup(t *testing.T) {
 	assert.PanicsWithValue(t, "wow", func() {
 		g.Wait()
 	})
+	leak.assertAllCanceled(t, errPanicked)
 }
 
 func TestPanicGroupSecondPath(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	g := Unlimited(context.Background())
 	var blocker sync.WaitGroup
 	blocker.Add(1)
-	g.Go(func(context.Context) {
+	g.Go(func(ctx context.Context) {
+		leak.leak(ctx)
 		blocker.Wait()
 		panic("wow")
 	})
@@ -159,16 +246,19 @@ func TestPanicGroupSecondPath(t *testing.T) {
 			t.Fatal("this op should never run")
 		})
 	})
+	leak.assertAllCanceled(t, errPanicked)
 }
 
 func TestPanicLimitedGroup(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	var waitForNonPanic, unblockInnocent, block sync.WaitGroup
 	waitForNonPanic.Add(1)
 	unblockInnocent.Add(1)
 	block.Add(1)
 	g := Limited(context.Background(), 10)
-	g.Go(func(context.Context) { // Innocent function
+	g.Go(func(ctx context.Context) { // Innocent function
+		leak.leak(ctx)
 		waitForNonPanic.Done()
 		unblockInnocent.Wait()
 	})
@@ -182,16 +272,19 @@ func TestPanicLimitedGroup(t *testing.T) {
 	assert.PanicsWithValue(t, "lol", func() {
 		g.Wait()
 	})
+	leak.assertAllCanceled(t, errPanicked)
 }
 
 func TestPanicLimitedGroupSecondPath(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	var waitForNonPanic, unblockInnocent, block sync.WaitGroup
 	waitForNonPanic.Add(1)
 	unblockInnocent.Add(1)
 	block.Add(1)
 	g := Limited(context.Background(), 10)
-	g.Go(func(context.Context) { // Innocent function
+	g.Go(func(ctx context.Context) { // Innocent function
+		leak.leak(ctx)
 		waitForNonPanic.Done()
 		unblockInnocent.Wait()
 	})
@@ -208,38 +301,47 @@ func TestPanicLimitedGroupSecondPath(t *testing.T) {
 			g.Go(func(context.Context) {})
 		}
 	})
+	leak.assertAllCanceled(t, errPanicked)
 }
 
 func TestPanicFeedFunction(t *testing.T) {
 	t.Parallel()
-	g := Feed(Unlimited(context.Background()), func(context.Context, int) error {
+	var leak contextLeak
+	g := Feed(Unlimited(context.Background()), func(ctx context.Context, _ int) error {
+		leak.leak(ctx)
 		panic("oh no!")
 	})
 	g.Go(func(context.Context) (int, error) {
 		return 1, nil
 	})
 	assert.PanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
 }
 
 func TestPanicFeedWork(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	g := Feed(Unlimited(context.Background()), func(context.Context, int) error {
 		t.Fatal("should not get called")
 		return nil
 	})
-	g.Go(func(context.Context) (int, error) {
+	g.Go(func(ctx context.Context) (int, error) {
+		leak.leak(ctx)
 		panic("oh no!")
 	})
 	assert.PanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
+	leak.assertAllCanceled(t, errPanicked)
 }
 
 func TestPanicFeedWorkSecondPath(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	g := Feed(Unlimited(context.Background()), func(context.Context, int) error {
 		t.Fatal("should not get called")
 		return nil
 	})
-	g.Go(func(context.Context) (int, error) {
+	g.Go(func(ctx context.Context) (int, error) {
+		leak.leak(ctx)
 		panic("oh no!")
 	})
 	ctx, _ := g.(feedingGroup[int]).g.getContext()
@@ -247,51 +349,63 @@ func TestPanicFeedWorkSecondPath(t *testing.T) {
 	assert.PanicsWithValue(t, "oh no!", func() {
 		g.Go(func(context.Context) (int, error) { return 2, nil })
 	})
+	leak.assertAllCanceled(t, errPanicked)
 }
 
 func TestPanicFeedFunctionNotCalled(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	g := Feed(Unlimited(context.Background()), func(context.Context, int) error {
 		panic("oh no!")
 	})
-	g.Go(func(context.Context) (int, error) {
+	g.Go(func(ctx context.Context) (int, error) {
+		leak.leak(ctx)
 		return 0, errors.New("foo")
 	})
 	assert.NotPanics(t, func() {
 		assert.Errorf(t, g.Wait(), "foo")
 	})
+	leak.assertAllCanceled(t)
 }
 
 func TestPanicFeedErrFunction(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	g := FeedWithErrs(Unlimited(context.Background()), func(context.Context, int) error {
 		panic("oh no!")
 	})
-	g.Go(func(context.Context) (int, error) {
+	g.Go(func(ctx context.Context) (int, error) {
+		leak.leak(ctx)
 		return 1, nil
 	})
 	assert.PanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
 }
 
 func TestPanicFeedErrWork(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	g := FeedWithErrs(Unlimited(context.Background()), func(context.Context, int) error {
 		t.Fatal("should not get a value")
 		return nil
 	})
-	g.Go(func(context.Context) (int, error) {
+	g.Go(func(ctx context.Context) (int, error) {
+		leak.leak(ctx)
 		panic("oh no!")
 	})
 	assert.PanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
+	leak.assertAllCanceled(t, errPanicked)
 }
 
 func TestPanicFeedErrWorkSecondPath(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	g := FeedWithErrs(Unlimited(context.Background()), func(context.Context, int) error {
 		t.Fatal("should not get a value")
 		return nil
 	})
-	g.Go(func(context.Context) (int, error) {
+	g.Go(func(ctx context.Context) (int, error) {
+		leak.leak(ctx)
 		panic("oh no!")
 	})
 	ctx, _ := g.(feedingMultiErrGroup[int]).g.getContext()
@@ -299,17 +413,22 @@ func TestPanicFeedErrWorkSecondPath(t *testing.T) {
 	assert.PanicsWithValue(t, "oh no!", func() {
 		g.Go(func(context.Context) (int, error) { return 2, nil })
 	})
+	leak.assertAllCanceled(t, errPanicked)
 }
 
 func TestPanicFeedErrFunctionNoValues(t *testing.T) {
 	t.Parallel()
+	var leak contextLeak
 	g := FeedWithErrs(Unlimited(context.Background()), func(context.Context, int) error {
-		panic("oh no!")
+		t.Fatal("should not get a value")
+		return nil
 	})
-	g.Go(func(context.Context) (int, error) {
+	g.Go(func(ctx context.Context) (int, error) {
+		leak.leak(ctx)
 		return 0, errors.New("regular error")
 	})
 	assert.Errorf(t, g.Wait(), "regular error")
+	leak.assertAllCanceled(t, errGroupDone)
 }
 
 func TestMisuseReuse(t *testing.T) {
