@@ -70,6 +70,8 @@ func TestTrivialGroupCleanup(t *testing.T) {
 		}
 	}()
 	runtime.GC() // Trigger cleanups for leaked resources
+	runtime.GC() // Trigger cleanups for leaked resources
+	runtime.GC() // Trigger cleanups for leaked resources
 	assert.Equal(t, int64(100), counter)
 	// The context should be canceled!
 	leak.assertAllCanceled(t, errGroupAbandoned)
