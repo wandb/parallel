@@ -53,6 +53,32 @@ func TestLimitedGroupCleanup(t *testing.T) {
 	leak.assertAllCanceled(t, errGroupAbandoned)
 }
 
+func TestTrivialGroupCleanup(t *testing.T) {
+	t.Parallel()
+	var counter int64
+	var leak contextLeak
+
+	func() {
+		g := Limited(context.Background(), 0)
+		for i := 0; i < 100; i++ {
+			g.Go(func(ctx context.Context) {
+				defer func() {
+					p := recover()
+					if p != nil {
+						println(p)
+					}
+				}()
+				atomic.AddInt64(&counter, 1)
+				leak.leak(ctx)
+			})
+		}
+	}()
+	runtime.GC() // Trigger cleanups for leaked resources
+	assert.Equal(t, int64(100), counter)
+	// The context should be canceled!
+	leak.assertAllCanceled(t, errGroupAbandoned)
+}
+
 func TestCollectorCleanup(t *testing.T) {
 	t.Parallel()
 	var leak contextLeak
