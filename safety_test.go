@@ -325,7 +325,7 @@ func TestPanicFeedWorkSecondPath(t *testing.T) {
 	t.Parallel()
 	var leak contextLeak
 	g := Feed(Unlimited(context.Background()), func(context.Context, int) error {
-		t.Fatal("should not get called")
+		t.Fatal("should not get a value")
 		return nil
 	})
 	g.Go(func(ctx context.Context) (int, error) {
@@ -344,16 +344,18 @@ func TestPanicFeedFunctionNotCalled(t *testing.T) {
 	t.Parallel()
 	var leak contextLeak
 	g := Feed(Unlimited(context.Background()), func(context.Context, int) error {
-		panic("oh no!")
+		t.Fatal("should not get a value")
+		return nil
 	})
+	fooError := errors.New("foo")
 	g.Go(func(ctx context.Context) (int, error) {
 		leak.leak(ctx)
-		return 0, errors.New("foo")
+		return 0, fooError
 	})
 	assert.NotPanics(t, func() {
-		assert.Errorf(t, g.Wait(), "foo")
+		assert.ErrorIs(t, g.Wait(), fooError)
 	})
-	leak.assertAllCanceled(t)
+	leak.assertAllCanceled(t, fooError)
 }
 
 func TestPanicFeedErrFunction(t *testing.T) {
