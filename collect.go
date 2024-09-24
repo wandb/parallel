@@ -227,6 +227,10 @@ func FeedWithErrs[T any](executor Executor, receiver func(context.Context, T) er
 // was errGroupDone, that doesn't count as an error and nil is returned instead.
 func groupError(ctx context.Context) error {
 	err := context.Cause(ctx)
+	// We are explicitly using == here to check for the exact value of our
+	// sentinel error, not using errors.Is(), because we don't actually want to
+	// find it if it's in wrapped errors. We *only* want to know whether the
+	// cancelation error is *exactly* errGroupDone.
 	if err == errGroupDone {
 		return nil
 	}
