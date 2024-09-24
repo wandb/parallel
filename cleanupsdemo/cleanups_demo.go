@@ -88,6 +88,7 @@ func main() {
 		{
 			g := parallel.Collect[int](parallel.Limited(ctx, batchSize))
 			g.Go(func(ctx context.Context) (int, error) {
+				leakDependent(ctx)
 				return 1, nil
 			})
 			_, err := g.Wait()
