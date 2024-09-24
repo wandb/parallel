@@ -97,7 +97,8 @@ func TestCollectorCleanup(t *testing.T) {
 	for range valuePipe {
 		// The channel should get closed!
 	}
-	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here,
+	// depending on whether the pipe group or the executor was reaped first
 }
 
 func TestFeederCleanup(t *testing.T) {
@@ -119,7 +120,8 @@ func TestFeederCleanup(t *testing.T) {
 	for range valuePipe {
 		// The channel should get closed!
 	}
-	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here,
+	// depending on whether the pipe group or the executor was reaped first
 }
 
 func TestGatherErrCleanup(t *testing.T) {
@@ -141,7 +143,8 @@ func TestGatherErrCleanup(t *testing.T) {
 	for range valuePipe {
 		// The channel should get closed!
 	}
-	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here,
+	// depending on whether the pipe group or the executor was reaped first
 }
 
 func TestCollectWithErrsCleanup(t *testing.T) {
@@ -163,7 +166,8 @@ func TestCollectWithErrsCleanup(t *testing.T) {
 	for range valuePipe {
 		// The channel should get closed!
 	}
-	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here,
+	// depending on whether the pipe group or the executor was reaped first
 }
 
 func TestFeedWithErrsCleanup(t *testing.T) {
@@ -186,7 +190,8 @@ func TestFeedWithErrsCleanup(t *testing.T) {
 	for range valuePipe {
 		// The channel should get closed!
 	}
-	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
+	leak.assertAllCanceled(t) // the cancelation error is inconsistent here,
+	// depending on whether the pipe group or the executor was reaped first
 }
 
 func TestPanicGroup(t *testing.T) {
@@ -303,7 +308,7 @@ func TestPanicFeedFunction(t *testing.T) {
 		return 1, nil
 	})
 	assertPanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
-	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
+	leak.assertAllCanceled(t, errPanicked)
 }
 
 func TestPanicFeedWork(t *testing.T) {
@@ -369,7 +374,7 @@ func TestPanicFeedErrFunction(t *testing.T) {
 		return 1, nil
 	})
 	assertPanicsWithValue(t, "oh no!", func() { _ = g.Wait() })
-	leak.assertAllCanceled(t) // the cancelation error is inconsistent here
+	leak.assertAllCanceled(t, errPanicked)
 }
 
 func TestPanicFeedErrWork(t *testing.T) {
