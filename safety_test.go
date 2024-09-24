@@ -29,12 +29,6 @@ func TestLimitedGroupCleanup(t *testing.T) {
 		g := Limited(context.Background(), 10)
 		for i := 0; i < 100; i++ {
 			g.Go(func(ctx context.Context) {
-				defer func() {
-					p := recover()
-					if p != nil {
-						println(p)
-					}
-				}()
 				atomic.AddInt64(&counter, 1)
 				leak.leak(ctx)
 			})
@@ -43,6 +37,8 @@ func TestLimitedGroupCleanup(t *testing.T) {
 		// leak the un-awaited group
 	}()
 	assert.NotNil(t, opsQueue)
+	runtime.GC() // Trigger cleanups for leaked resources
+	runtime.GC() // Trigger cleanups for leaked resources
 	runtime.GC() // Trigger cleanups for leaked resources
 
 	// In the event that we need to drain the ops queue below, we need to have
@@ -68,13 +64,7 @@ func TestTrivialGroupCleanup(t *testing.T) {
 		g := Limited(context.Background(), 0)
 		for i := 0; i < 100; i++ {
 			g.Go(func(ctx context.Context) {
-				defer func() {
-					p := recover()
-					if p != nil {
-						println(p)
-					}
-				}()
-				atomic.AddInt64(&counter, 1)
+				counter++
 				leak.leak(ctx)
 			})
 		}
