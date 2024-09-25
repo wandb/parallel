@@ -1,6 +1,6 @@
 module github.com/wandb/parallel
 
-go 1.23.1
+go 1.21.0
 
 require github.com/stretchr/testify v1.9.0
 
