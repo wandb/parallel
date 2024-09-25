@@ -223,6 +223,20 @@ func FeedWithErrs[T any](executor Executor, receiver func(context.Context, T) er
 	return making
 }
 
+// groupError returns the error associated with a group's context; if the error
+// was errGroupDone, that doesn't count as an error and nil is returned instead.
+func groupError(ctx context.Context) error {
+	err := context.Cause(ctx)
+	// We are explicitly using == here to check for the exact value of our
+	// sentinel error, not using errors.Is(), because we don't actually want to
+	// find it if it's in wrapped errors. We *only* want to know whether the
+	// cancelation error is *exactly* errGroupDone.
+	if err == errGroupDone {
+		return nil
+	}
+	return err
+}
+
 var _ ErrGroupExecutor = &errGroup{}
 
 type errGroup struct {
@@ -242,7 +256,7 @@ func (eg *errGroup) Go(op func(context.Context) error) {
 func (eg *errGroup) Wait() error {
 	eg.g.Wait()
 	ctx, _ := eg.g.getContext()
-	return context.Cause(ctx)
+	return groupError(ctx)
 }
 
 func makePipeGroup[T any, R any](executor Executor) *pipeGroup[T, R] {
@@ -290,6 +304,14 @@ func (pg *pipeGroup[T, R]) doWait() {
 	// even in case of a panic by deferring it, and that always only happens at
 	// the end of the function... so, we just put an inner function here to make
 	// it happen "early."
+
+	// Runs last: We must make completely certain that we cancel the context
+	// owned by the pipeGroup. This context is shared between the executor and
+	// the pipeWorkers; we take charge of making sure this cancelation happens
+	// as soon as possible here, and we want it to happen at the very end after
+	// everything else in case something else wanted to set the cancel cause of
+	// the context to an actual error instead of our "no error" sentinel value.
+	defer pg.pipeWorkers.cancel(errGroupDone)
 	func() {
 		// Runs second: Close the results chan and unblock the pipe worker.
 		// Because we're deferring this, it will happen even if there is a panic
@@ -300,11 +322,12 @@ func (pg *pipeGroup[T, R]) doWait() {
 				runtime.SetFinalizer(pg, nil)
 			}
 		}()
-		// Runs first: Wait for inputs
-		pg.g.Wait()
+		// Runs first: Wait for inputs. Wait "quietly", not canceling the
+		// context yet so if there is an error later we can still see it
+		pg.g.quietWait()
 	}()
 	// Runs third: Wait for outputs to be done
-	pg.pipeWorkers.Wait()
+	pg.pipeWorkers.quietWait()
 }
 
 var _ CollectingExecutor[int] = collectingGroup[int]{}
@@ -329,7 +352,7 @@ func (cg collectingGroup[T]) Go(op func(context.Context) (T, error)) {
 func (cg collectingGroup[T]) Wait() ([]T, error) {
 	cg.doWait()
 	ctx, _ := cg.g.getContext()
-	if err := context.Cause(ctx); err != nil {
+	if err := groupError(ctx); err != nil {
 		// We have an error; return it
 		return nil, err
 	}
@@ -358,7 +381,7 @@ func (fg feedingGroup[T]) Go(op func(context.Context) (T, error)) {
 func (fg feedingGroup[T]) Wait() error {
 	fg.doWait()
 	ctx, _ := fg.g.getContext()
-	return context.Cause(ctx)
+	return groupError(ctx)
 }
 
 var _ AllErrsExecutor = multiErrGroup{}
@@ -381,7 +404,7 @@ func (meg multiErrGroup) Wait() MultiError {
 	meg.doWait()
 	err := CombineErrors(*meg.res...)
 	ctx, _ := meg.g.getContext()
-	if cause := context.Cause(ctx); cause != nil {
+	if cause := groupError(ctx); cause != nil {
 		return CombineErrors(cause, err)
 	}
 	return err
@@ -415,7 +438,7 @@ func (ceg collectingMultiErrGroup[T]) Wait() ([]T, MultiError) {
 	ceg.doWait()
 	res, err := ceg.res.values, CombineErrors(ceg.res.errs...)
 	ctx, _ := ceg.g.getContext()
-	if cause := context.Cause(ctx); cause != nil {
+	if cause := groupError(ctx); cause != nil {
 		return res, CombineErrors(cause, err)
 	}
 	return res, err
@@ -439,7 +462,7 @@ func (feg feedingMultiErrGroup[T]) Wait() MultiError {
 	feg.doWait()
 	err := CombineErrors(*feg.res...)
 	ctx, _ := feg.g.getContext()
-	if cause := context.Cause(ctx); cause != nil {
+	if cause := groupError(ctx); cause != nil {
 		return CombineErrors(cause, err)
 	}
 	return err

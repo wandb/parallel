@@ -8,7 +8,37 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type contextLeak struct {
+	lock sync.Mutex
+	ctxs []context.Context
+}
+
+func (c *contextLeak) leak(ctx context.Context) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.ctxs = append(c.ctxs, ctx)
+}
+
+func (c *contextLeak) assertAllCanceled(t *testing.T, expected ...error) {
+	t.Helper()
+	if len(expected) > 1 {
+		panic("please just provide 1 expected error for all the contexts")
+	}
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	for _, ctx := range c.ctxs {
+		cause := context.Cause(ctx)
+		if cause == nil {
+			t.Fatal("context was not canceled")
+		}
+		if len(expected) == 1 {
+			require.ErrorIs(t, cause, expected[0])
+		}
+	}
+}
 
 func assertPanicsWithValue(t *testing.T, expectedValue any, f func()) {
 	t.Helper()
@@ -57,14 +87,17 @@ func testGroup(t *testing.T, makeExec func(context.Context) Executor) {
 	t.Run("sum 100", func(t *testing.T) {
 		t.Parallel()
 		var counter int64
+		var leak contextLeak
 		g := makeExec(context.Background())
 		for i := 0; i < 100; i++ {
-			g.Go(func(context.Context) {
+			g.Go(func(ctx context.Context) {
+				leak.leak(ctx)
 				atomic.AddInt64(&counter, 1)
 			})
 		}
 		g.Wait()
 		assert.Equal(t, int64(100), counter)
+		leak.assertAllCanceled(t, errGroupDone)
 	})
 	t.Run("sum canceled", func(t *testing.T) {
 		t.Parallel()

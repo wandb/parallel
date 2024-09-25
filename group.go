@@ -16,7 +16,16 @@ const bufferSize = 8
 
 const misuseMessage = "parallel executor misuse: don't reuse executors"
 
-var errPanicked = errors.New("panicked")
+var (
+	errPanicked = errors.New("panicked")
+	// errGroupDone is a sentinel error value used to cancel an execution
+	// context when it has completed without error.
+	errGroupDone      = errors.New("executor done")
+	errGroupAbandoned = errors.New("executor abandoned")
+
+	// Contexts are canceled with this error when executors are awaited.
+	GroupDoneError = errGroupDone
+)
 
 // WorkerPanic represents a panic value propagated from a task within a parallel
 // executor, and is the main type of panic that you might expect to receive.
@@ -54,6 +63,9 @@ type Executor interface {
 
 	// internal
 	getContext() (context.Context, context.CancelCauseFunc)
+	// Waits without canceling the context with errGroupDone. The caller of this
+	// function promises that they will be responsible for canceling the context
+	quietWait()
 }
 
 // Creates a basic executor which runs all the functions given in one goroutine
@@ -73,8 +85,16 @@ func Unlimited(ctx context.Context) Executor {
 // should still be cleaned up.
 func Limited(ctx context.Context, maxGoroutines int) Executor {
 	if maxGoroutines < 1 {
+		// When maxGoroutines is non-positive, we return the trivial executor
+		// type directly.
 		gctx, cancel := context.WithCancelCause(ctx)
-		return &runner{ctx: gctx, cancel: cancel}
+		g := &runner{ctx: gctx, cancel: cancel}
+		// This executor still needs to make certain that its context always
+		// gets canceled!
+		runtime.SetFinalizer(g, func(doomed *runner) {
+			doomed.cancel(errGroupAbandoned)
+		})
+		return g
 	}
 	making := &limitedGroup{
 		g:   makeGroup(context.WithCancelCause(ctx)),
@@ -83,15 +103,29 @@ func Limited(ctx context.Context, maxGoroutines int) Executor {
 	}
 	runtime.SetFinalizer(making, func(doomed *limitedGroup) {
 		close(doomed.ops)
-		doomed.g.cancel(nil)
 	})
 	return making
 }
 
-// Base executor with an interface that runs everything serially.
+// Base executor with an interface that runs everything serially. This can be
+// returned directly from Limited in a special case, and otherwise it is just
+// composed as inner struct fields for the base concurrent group struct.
+//
+// The lifecycle of the context is important: When the executor is set up we
+// create a cancelable context, and we need to guarantee that it is eventually
+// canceled or it can stay resident indefinitely in the known children of a
+// parent context, effectively leaking memory. To do this, we guarantee that the
+// context is canceled in one of a couple ways:
+//  1. if the executor is abandoned without awaiting, a runtime finalizer that
+//     is registered immediately after we create the executor will cancel it
+//  2. if the executor is awaited and completes normally, after everything else
+//     has completed the context will be canceled with the errGroupDone sentinel
+//  3. if there is a panic or another kind of error that causes the executor to
+//     terminate early (such as with ErrGroup), the context is canceled with
+//     error normally in this way.
 type runner struct {
-	ctx     context.Context         // Closed when we panic or get garbage collected
-	cancel  context.CancelCauseFunc // Only close the dying channel one time
+	ctx     context.Context         // Execution context
+	cancel  context.CancelCauseFunc // Cancel for the ctx; must always be called
 	awaited atomic.Bool             // Set when Wait() is called
 }
 
@@ -108,7 +142,13 @@ func (n *runner) Go(op func(context.Context)) {
 }
 
 func (n *runner) Wait() {
+	n.quietWait()
+	n.cancel(errGroupDone)
+}
+
+func (n *runner) quietWait() {
 	n.awaited.Store(true)
+	runtime.SetFinalizer(n, nil)
 }
 
 func (n *runner) getContext() (context.Context, context.CancelCauseFunc) {
@@ -116,7 +156,11 @@ func (n *runner) getContext() (context.Context, context.CancelCauseFunc) {
 }
 
 func makeGroup(ctx context.Context, cancel context.CancelCauseFunc) *group {
-	return &group{runner: runner{ctx: ctx, cancel: cancel}}
+	g := &group{runner: runner{ctx: ctx, cancel: cancel}}
+	runtime.SetFinalizer(g, func(doomed *group) {
+		doomed.cancel(errGroupAbandoned)
+	})
+	return g
 }
 
 // Base concurrent executor
@@ -181,7 +225,13 @@ func (g *group) Go(op func(context.Context)) {
 }
 
 func (g *group) Wait() {
+	defer g.cancel(errGroupDone)
+	g.quietWait()
+}
+
+func (g *group) quietWait() {
 	g.awaited.Store(true)
+	runtime.SetFinalizer(g, nil)
 	g.wg.Wait()
 	g.checkPanic()
 }
@@ -258,6 +308,14 @@ func (lg *limitedGroup) Wait() {
 		runtime.SetFinalizer(lg, nil) // Don't try to close this chan again :)
 	}
 	lg.g.Wait()
+}
+
+func (lg *limitedGroup) quietWait() {
+	if !lg.awaited.Swap(true) {
+		close(lg.ops)
+		runtime.SetFinalizer(lg, nil) // Don't try to close this chan again :)
+	}
+	lg.g.quietWait()
 }
 
 func (lg *limitedGroup) getContext() (context.Context, context.CancelCauseFunc) {
