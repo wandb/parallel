@@ -17,7 +17,9 @@ const bufferSize = 8
 const misuseMessage = "parallel executor misuse: don't reuse executors"
 
 var (
-	errPanicked       = errors.New("panicked")
+	errPanicked = errors.New("panicked")
+	// errGroupDone is a sentinel error value used to cancel an execution
+	// context when it has completed without error.
 	errGroupDone      = errors.New("executor done")
 	errGroupAbandoned = errors.New("executor abandoned")
 
@@ -83,8 +85,12 @@ func Unlimited(ctx context.Context) Executor {
 // should still be cleaned up.
 func Limited(ctx context.Context, maxGoroutines int) Executor {
 	if maxGoroutines < 1 {
+		// When maxGoroutines is non-positive, we return the trivial executor
+		// type directly.
 		gctx, cancel := context.WithCancelCause(ctx)
 		g := &runner{ctx: gctx, cancel: cancel}
+		// This executor still needs to make certain that its context always
+		// gets canceled!
 		runtime.SetFinalizer(g, func(doomed *runner) {
 			doomed.cancel(errGroupAbandoned)
 		})
@@ -101,10 +107,25 @@ func Limited(ctx context.Context, maxGoroutines int) Executor {
 	return making
 }
 
-// Base executor with an interface that runs everything serially.
+// Base executor with an interface that runs everything serially. This can be
+// returned directly from Limited in a special case, and otherwise it is just
+// composed as inner struct fields for the base concurrent group struct.
+//
+// The lifecycle of the context is important: When the executor is set up we
+// create a cancelable context, and we need to guarantee that it is eventually
+// canceled or it can stay resident indefinitely in the known children of a
+// parent context, effectively leaking memory. To do this, we guarantee that the
+// context is canceled in one of a couple ways:
+//  1. if the executor is abandoned without awaiting, a runtime finalizer that
+//     is registered immediately after we create the executor will cancel it
+//  2. if the executor is awaited and completes normally, after everything else
+//     has completed the context will be canceled with the errGroupDone sentinel
+//  3. if there is a panic or another kind of error that causes the executor to
+//     terminate early (such as with ErrGroup), the context is canceled with
+//     error normally in this way.
 type runner struct {
-	ctx     context.Context         // Closed when we panic or get garbage collected
-	cancel  context.CancelCauseFunc // Only close the dying channel one time
+	ctx     context.Context         // Execution context
+	cancel  context.CancelCauseFunc // Cancel for the ctx; must always be called
 	awaited atomic.Bool             // Set when Wait() is called
 }
 
