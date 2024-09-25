@@ -26,10 +26,20 @@ func main() {
 
 	println("leaking goroutines from group executors...")
 
-	// Dependent contexts are always canceled, too
+	// Dependent contexts are always canceled, too.
+	//
+	// This binary generally tests that executors and collectors always clean up
+	// after themselves, that any extra goroutines and channels and contexts
+	// they open will be shut down. The easiest thing we can measure is running
+	// goroutines, so to measure things that aren't goroutines (like unclosed
+	// contexts) we can just start new goroutines that wait for contexts we
+	// expect to be canceled.
 	leakDependent := func(ctx context.Context) {
+		// All canceleable child contexts are also canceled
 		ctx, cancel := context.WithCancel(ctx)
 		_ = cancel
+		// Leak a goroutine whose halting depends on the given context being
+		// canceled.
 		go func() {
 			<-ctx.Done()
 		}()
