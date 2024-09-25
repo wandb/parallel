@@ -525,6 +525,8 @@ func TestForgottenPipeLegiblePanic(t *testing.T) {
 	}()
 	assert.NotNil(t, valuePipe)
 	runtime.GC() // Trigger cleanups for leaked resources
+	runtime.GC() // Trigger cleanups for leaked resources
+	runtime.GC() // Trigger cleanups for leaked resources
 	for range valuePipe {
 	}
 	// The collector's pipe is now closed. Unblock the task we submitted to the
