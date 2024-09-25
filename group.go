@@ -97,7 +97,6 @@ func Limited(ctx context.Context, maxGoroutines int) Executor {
 	}
 	runtime.SetFinalizer(making, func(doomed *limitedGroup) {
 		close(doomed.ops)
-		doomed.g.cancel(errGroupAbandoned)
 	})
 	return making
 }
