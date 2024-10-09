@@ -324,10 +324,10 @@ func (pg *pipeGroup[T, R]) doWait() {
 		}()
 		// Runs first: Wait for inputs. Wait "quietly", not canceling the
 		// context yet so if there is an error later we can still see it
-		pg.g.quietWait()
+		pg.g.waitWithoutCanceling()
 	}()
 	// Runs third: Wait for outputs to be done
-	pg.pipeWorkers.quietWait()
+	pg.pipeWorkers.waitWithoutCanceling()
 }
 
 var _ CollectingExecutor[int] = collectingGroup[int]{}
