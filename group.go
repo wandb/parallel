@@ -31,7 +31,7 @@ var (
 
 // WorkerPanic represents a panic value propagated from a task within a parallel
 // executor, and is the main type of panic that you might expect to receive.
-type WorkerPanic struct {
+type WorkerPanic struct { //nolint:errname
 	// Panic contains the originally panic()ed value.
 	Panic any
 	// Stacktraces contains the stacktraces of the panics. The stack trace of
