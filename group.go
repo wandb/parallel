@@ -3,8 +3,10 @@ package parallel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -37,6 +39,21 @@ type WorkerPanic struct {
 	// stack traces from other parallel groups that received this panic and re-
 	// threw it appear in order afterwards.
 	Stacktraces []string
+}
+
+// We pretty-print our wrapped panic type including the captured stack traces.
+func (wp WorkerPanic) Error() string {
+	var sb strings.Builder
+	for _, s := range wp.Stacktraces {
+		sb.WriteString(s)
+		sb.WriteByte('\n')
+	}
+	return fmt.Sprintf(
+		"%#v\n\nPrior %d executor stack trace(s), innermost first:\n%s",
+		wp.Panic,
+		len(wp.Stacktraces),
+		sb.String(),
+	)
 }
 
 // NOTE: If you want to really get crazy with it, it IS permissible and safe to
