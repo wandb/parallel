@@ -26,7 +26,7 @@ var (
 	errGroupAbandoned = errors.New("executor abandoned")
 
 	// Contexts are canceled with this error when executors are awaited.
-	GroupDoneError = errGroupDone
+	GroupDoneError = errGroupDone //nolint:errname
 )
 
 // WorkerPanic represents a panic value propagated from a task within a parallel
