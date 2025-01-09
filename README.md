@@ -60,7 +60,9 @@ For simply running work to completion, we have some very simple executors:
    // run with at most N parallelism
    group := parallel.Limited(ctx, 10)
    for i := 0; i < 100; i++ {
-       i := i // Sorry, this library can't solve captured value mistakes :(
+       // i := i -- We no longer support versions of golang that do not have
+       // the loopvar semantic enabled by default; worrying about repeatedly
+	   // capturing the same loop variable should be a thing of the past.
        group.Go(func(ctx context.Context) {
            <-time.After(time.Second)
            println("ok", i)
@@ -192,9 +194,22 @@ Unfortunately if we write functions that get stuck and block forever, that's sti
 * If stopping on errors is not desirable, use the wrappers which are designed to collect a `MultiErr`: `GatherErrs`, `FeedWithErrs` and `CollectWithErrs`
 
 ## Additional notes
+
+### Conceptual organization
+
 There are basically two different concepts here:
 1. an underlying `Executor` that runs functions in goroutines, and
 2. various kinds of wrappers for that that take functions with/without return values, with/without automatic halting on error, and either collecting results into a slice automatically or sending them to a function we provide up front.
+
+### Context lifetime
+
+**Possibly important:** ➡️ The *inner* context provided to the functions run by the executors *always* gets canceled, even if the executor completes successfully. If a worker function needs to capture or leak a context that must outlive the executor, it should *explicitly ignore* the `Context` parameter that it receives from the executor and capture a longer-lived one instead.
+
+This avoids unbounded memory usage buildup inside the outer context. Cancelable child contexts of other cancelable child contexts can never be garbage collected until they are canceled, which is why linters often admonish us to `defer cancel()` after creating one. If the parent context is long lived this can lead to a very, very large amount of uncollectable memory built up.
+
+If you are seeing context cancelation errors with the `ctx.Cause()` error string `"executor done"`, that means a worker function should probably be capturing a longer-lived context.
+
+### Executor reuse
 
 It's possible to use a single executor for none, one, or several wrappers at the same time; this works fine, but we must be careful:
 
