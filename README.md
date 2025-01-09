@@ -145,7 +145,7 @@ For the more complex chore of running work that produces results which are aggre
 * `parallel.CollectWithErrs[T](executor)`, for `func(context.Context) (T, error)`
    * `MultiError`-returning version of `Collect[T]` which, like `GatherErrs`, does not halt when an error occurs
    ```go
-   group := parallel.Collect[int](parallel.Unlimited(ctx))
+   group := parallel.CollectWithErrs[int](parallel.Unlimited(ctx))
    group.Go(func(ctx context.Context) (int, error) {
        return 1, nil
    })
@@ -164,7 +164,7 @@ For the more complex chore of running work that produces results which are aggre
    * `MultiError`-returning version of `Feed`
    ```go
    result := make(map[int]bool)
-   group := parallel.FeedWithErr(parallel.Unlimited(ctx),
+   group := parallel.FeedWithErrs(parallel.Unlimited(ctx),
        func(ctx context.Context, n int) error {
            // values from the functions sent to the group end up here,
            // but only if there was no error!
