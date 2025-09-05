@@ -248,7 +248,7 @@ func (g *group) Wait() {
 
 func (g *group) waitWithoutCanceling() {
 	g.awaited.Store(true)
-	runtime.SetFinalizer(g, nil)
+	// runtime.SetFinalizer(g, nil)
 	g.wg.Wait()
 	g.checkPanic()
 }
