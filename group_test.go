@@ -2,7 +2,9 @@ package parallel
 
 import (
 	"context"
+	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -49,6 +51,10 @@ func assertPanicsWithValue(t *testing.T, expectedValue any, f func()) {
 			t.Fatal("didn't panic but should have")
 		}
 		assert.Equal(t, expectedValue, p.(WorkerPanic).Panic)
+		panicText := p.(WorkerPanic).Error()
+		firstPanicLine := strings.SplitN(panicText, "\n", 2)[0]
+		assert.Equal(t, fmt.Sprintf("%#v", expectedValue), firstPanicLine)
+		assert.True(t, strings.Contains(panicText, " executor stack trace(s), innermost first:\n"))
 	}()
 
 	f()
