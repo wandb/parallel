@@ -164,8 +164,9 @@ func (n *runner) Wait() {
 }
 
 func (n *runner) waitWithoutCanceling() {
-	n.awaited.Store(true)
-	runtime.SetFinalizer(n, nil)
+	if !n.awaited.Swap(true) {
+		runtime.SetFinalizer(n, nil) // unset the finalizer the first time
+	}
 }
 
 func (n *runner) getContext() (context.Context, context.CancelCauseFunc) {
@@ -247,8 +248,9 @@ func (g *group) Wait() {
 }
 
 func (g *group) waitWithoutCanceling() {
-	g.awaited.Store(true)
-	runtime.SetFinalizer(g, nil)
+	if !g.awaited.Swap(true) {
+		runtime.SetFinalizer(g, nil) // unset the finalizer the first time
+	}
 	g.wg.Wait()
 	g.checkPanic()
 }
